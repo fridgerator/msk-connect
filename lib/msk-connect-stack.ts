@@ -1,8 +1,8 @@
-import { Stack, StackProps } from 'aws-cdk-lib';
-import { Construct } from 'constructs';
+import { Stack, StackProps } from "aws-cdk-lib";
+import { Construct } from "constructs";
 // import * as sqs from 'aws-cdk-lib/aws-sqs';
-import { CfnCluster } from 'aws-cdk-lib/aws-msk'
-import { Vpc } from 'aws-cdk-lib/aws-ec2';
+import { CfnCluster } from "aws-cdk-lib/aws-msk";
+import { Vpc } from "aws-cdk-lib/aws-ec2";
 
 export class MskConnectStack extends Stack {
   props: StackProps;
@@ -13,20 +13,20 @@ export class MskConnectStack extends Stack {
     this.build();
   }
 
-  build () {
+  build() {
     const vpc = new Vpc(this, "msk-vpc", {
       maxAzs: 2,
-    })
-    vpc.privateSubnets[0].subnetId
+    });
+    vpc.privateSubnets[0].subnetId;
 
     const mskCluster = new CfnCluster(this, "msk-cluster", {
-      clusterName: 'msk-cluster',
-      kafkaVersion: '2.8.0',
-      numberOfBrokerNodes: 3,
+      clusterName: "msk-cluster",
+      kafkaVersion: "2.8.0",
+      numberOfBrokerNodes: 2,
       brokerNodeGroupInfo: {
         instanceType: "kafka.t3.small",
-        clientSubnets: vpc.privateSubnets.map(s => s.subnetId)
-      }
-    })
+        clientSubnets: vpc.privateSubnets.map((s) => s.subnetId),
+      },
+    });
   }
 }
