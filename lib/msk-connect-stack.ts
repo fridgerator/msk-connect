@@ -1,8 +1,21 @@
-import { Stack, StackProps } from "aws-cdk-lib";
+import { CfnOutput, RemovalPolicy, Stack, StackProps } from "aws-cdk-lib";
 import { Construct } from "constructs";
-// import * as sqs from 'aws-cdk-lib/aws-sqs';
-import { CfnCluster } from "aws-cdk-lib/aws-msk";
-import { Vpc } from "aws-cdk-lib/aws-ec2";
+import {
+  Vpc,
+  Instance,
+  InstanceType,
+  InstanceSize,
+  InstanceClass,
+  SecurityGroup,
+  MachineImage,
+  AmazonLinuxGeneration,
+  SubnetType,
+  Peer,
+  Port,
+} from "aws-cdk-lib/aws-ec2";
+import { ManagedPolicy, Role, ServicePrincipal } from "aws-cdk-lib/aws-iam";
+import * as fs from "fs";
+import { Cluster, KafkaVersion } from "@aws-cdk/aws-msk-alpha";
 
 export class MskConnectStack extends Stack {
   props: StackProps;
@@ -17,16 +30,52 @@ export class MskConnectStack extends Stack {
     const vpc = new Vpc(this, "msk-vpc", {
       maxAzs: 2,
     });
-    vpc.privateSubnets[0].subnetId;
 
-    const mskCluster = new CfnCluster(this, "msk-cluster", {
+    const mskCluster = new Cluster(this, "msk-cluster", {
       clusterName: "msk-cluster",
-      kafkaVersion: "2.8.0",
+      kafkaVersion: KafkaVersion.V2_8_1,
       numberOfBrokerNodes: 2,
-      brokerNodeGroupInfo: {
-        instanceType: "kafka.t3.small",
-        clientSubnets: vpc.privateSubnets.map((s) => s.subnetId),
-      },
+      vpc,
+      instanceType: InstanceType.of(InstanceClass.T3, InstanceSize.SMALL),
+      removalPolicy: RemovalPolicy.DESTROY,
     });
+
+    mskCluster.connections.allowFrom(
+      Peer.ipv4(vpc.vpcCidrBlock),
+      Port.tcp(9094),
+      "Allow connections from vpc"
+    );
+
+    new CfnOutput(this, "msk-brokers", {
+      value: mskCluster.bootstrapBrokersTls,
+    });
+
+    const instanceSG = new SecurityGroup(this, "instance-sg", {
+      vpc,
+      description: "Allow traffic for session manager",
+      allowAllOutbound: true,
+    });
+
+    const instanceRole = new Role(this, "instance-role", {
+      assumedBy: new ServicePrincipal("ec2.amazonaws.com"),
+    });
+    instanceRole.addManagedPolicy(
+      ManagedPolicy.fromAwsManagedPolicyName("AmazonSSMManagedInstanceCore")
+    );
+
+    // instance for session manager
+    const privateInstance = new Instance(this, "private-instance", {
+      vpc,
+      instanceType: InstanceType.of(InstanceClass.T2, InstanceSize.MICRO),
+      machineImage: MachineImage.latestAmazonLinux({
+        generation: AmazonLinuxGeneration.AMAZON_LINUX_2,
+      }),
+      vpcSubnets: {
+        subnetType: SubnetType.PRIVATE_WITH_EGRESS,
+      },
+      securityGroup: instanceSG,
+      role: instanceRole,
+    });
+    privateInstance.addUserData(fs.readFileSync("lib/user_data.sh", "utf-8"));
   }
 }
