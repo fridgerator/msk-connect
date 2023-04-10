@@ -1,28 +1,13 @@
-import { CfnOutput, RemovalPolicy, Stack, StackProps } from "aws-cdk-lib";
+import { RemovalPolicy, Stack, StackProps } from "aws-cdk-lib";
 import { Construct } from "constructs";
-import {
-  Vpc,
-  Instance,
-  InstanceType,
-  InstanceSize,
-  InstanceClass,
-  SecurityGroup,
-  MachineImage,
-  AmazonLinuxGeneration,
-  SubnetType,
-  Peer,
-  Port,
-} from "aws-cdk-lib/aws-ec2";
+
+import { Bucket } from "aws-cdk-lib/aws-s3";
 import {
   Effect,
-  ManagedPolicy,
   PolicyStatement,
   Role,
   ServicePrincipal,
 } from "aws-cdk-lib/aws-iam";
-import * as fs from "fs";
-import { Cluster, KafkaVersion } from "@aws-cdk/aws-msk-alpha";
-import { Bucket } from "aws-cdk-lib/aws-s3";
 import { CfnConnector } from "aws-cdk-lib/aws-kafkaconnect";
 import {
   AwsCustomResource,
@@ -30,9 +15,11 @@ import {
   PhysicalResourceId,
 } from "aws-cdk-lib/custom-resources";
 import { LogGroup } from "aws-cdk-lib/aws-logs";
+import { StringParameter } from "aws-cdk-lib/aws-ssm";
+import { SecurityGroup, Vpc } from "aws-cdk-lib/aws-ec2";
 
 const PLUGIN_BUCKET = "msk-connect-plugin-bucket";
-const PLUGIN_FILE = "confluentinc-kafka-connect-s3-10.4.2";
+const PLUGIN_FILE = "confluentinc-kafka-connect-s3-10.4.2.zip";
 
 export class MskConnectStack extends Stack {
   props: StackProps;
@@ -44,59 +31,10 @@ export class MskConnectStack extends Stack {
   }
 
   build() {
-    const vpc = new Vpc(this, "msk-vpc", {
-      maxAzs: 2,
-    });
-
-    const mskCluster = new Cluster(this, "msk-cluster", {
-      clusterName: "msk-cluster",
-      kafkaVersion: KafkaVersion.V2_8_1,
-      numberOfBrokerNodes: 2,
-      vpc,
-      instanceType: InstanceType.of(InstanceClass.T3, InstanceSize.SMALL),
-      removalPolicy: RemovalPolicy.DESTROY,
-    });
-
-    mskCluster.connections.allowFrom(
-      Peer.ipv4(vpc.vpcCidrBlock),
-      Port.tcp(9094),
-      "Allow connections from vpc"
-    );
-
-    new CfnOutput(this, "msk-brokers", {
-      value: mskCluster.bootstrapBrokersTls,
-    });
-
-    const instanceSG = new SecurityGroup(this, "instance-sg", {
-      vpc,
-      description: "Allow traffic for session manager",
-      allowAllOutbound: true,
-    });
-
-    const instanceRole = new Role(this, "instance-role", {
-      assumedBy: new ServicePrincipal("ec2.amazonaws.com"),
-    });
-    instanceRole.addManagedPolicy(
-      ManagedPolicy.fromAwsManagedPolicyName("AmazonSSMManagedInstanceCore")
-    );
-
-    // instance for session manager
-    const privateInstance = new Instance(this, "private-instance", {
-      vpc,
-      instanceType: InstanceType.of(InstanceClass.T2, InstanceSize.MICRO),
-      machineImage: MachineImage.latestAmazonLinux({
-        generation: AmazonLinuxGeneration.AMAZON_LINUX_2,
-      }),
-      vpcSubnets: {
-        subnetType: SubnetType.PRIVATE_WITH_EGRESS,
-      },
-      securityGroup: instanceSG,
-      role: instanceRole,
-    });
-    privateInstance.addUserData(fs.readFileSync("lib/user_data.sh", "utf-8"));
-
     const sinkBucket = new Bucket(this, "SinkBucket", {
       versioned: false,
+      autoDeleteObjects: true,
+      removalPolicy: RemovalPolicy.DESTROY,
     });
 
     const mskConnectRole = new Role(this, "MskConnectRole", {
@@ -167,14 +105,30 @@ export class MskConnectStack extends Stack {
       },
     });
 
+    const boostrapParam = StringParameter.fromStringParameterName(
+      this,
+      "msk-brokers-from-param",
+      "/msk/bootstrap-brokers"
+    );
+
+    const vpc = Vpc.fromLookup(this, "msk-vpc-lookup", {
+      vpcName: "msk-vpc",
+    });
+
+    const sg = new SecurityGroup(this, "msk-connect-sg", {
+      vpc,
+      description: "Allow msk connector traffic",
+      allowAllOutbound: true,
+    });
+
     const mskConnect = new CfnConnector(this, "MskConnector", {
       connectorConfiguration: kafkaConnectS3SinkConfig,
       connectorName: "S3-sink-connector",
       kafkaCluster: {
         apacheKafkaCluster: {
-          bootstrapServers: mskCluster.bootstrapBrokersTls,
+          bootstrapServers: boostrapParam.stringValue,
           vpc: {
-            securityGroups: [],
+            securityGroups: [sg.securityGroupId],
             subnets: vpc.privateSubnets.map((s) => s.subnetId),
           },
         },
@@ -214,14 +168,14 @@ export class MskConnectStack extends Stack {
         workerLogDelivery: {
           cloudWatchLogs: {
             enabled: true,
-            logGroup: new LogGroup(this, "msk-connect-LogGroup", {})
-              .logGroupName,
+            logGroup: new LogGroup(this, "msk-connect-LogGroup", {
+              removalPolicy: RemovalPolicy.DESTROY,
+            }).logGroupName,
           },
         },
       },
     });
 
-    sinkBucket.node.addDependency(mskCluster);
     mskConnect.node.addDependency(sinkBucket);
   }
 }
