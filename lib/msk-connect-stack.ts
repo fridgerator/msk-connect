@@ -16,7 +16,8 @@ import {
 } from "aws-cdk-lib/custom-resources";
 import { LogGroup } from "aws-cdk-lib/aws-logs";
 import { StringParameter } from "aws-cdk-lib/aws-ssm";
-import { SecurityGroup, Vpc } from "aws-cdk-lib/aws-ec2";
+import { Port, SecurityGroup, Vpc } from "aws-cdk-lib/aws-ec2";
+import { Cluster } from "@aws-cdk/aws-msk-alpha";
 
 const PLUGIN_BUCKET = "msk-connect-plugin-bucket";
 const PLUGIN_FILE = "confluentinc-kafka-connect-s3-10.4.2.zip";
@@ -36,11 +37,6 @@ export class MskConnectStack extends Stack {
       autoDeleteObjects: true,
       removalPolicy: RemovalPolicy.DESTROY,
     });
-
-    const mskConnectRole = new Role(this, "MskConnectRole", {
-      assumedBy: new ServicePrincipal("connect.amazonaws.com"),
-    });
-    sinkBucket.grantReadWrite(mskConnectRole);
 
     const kafkaConnectS3SinkConfig = {
       "connector.class": "io.confluent.connect.s3.S3SinkConnector",
@@ -67,7 +63,10 @@ export class MskConnectStack extends Stack {
         }),
         new PolicyStatement({
           effect: Effect.ALLOW,
-          actions: ["kafkaconnect:CreateCustomPlugin"],
+          actions: [
+            "kafkaconnect:CreateCustomPlugin",
+            "kafkaconnect:DeleteCustomPlugin",
+          ],
           resources: ["*"],
         }),
       ]),
@@ -103,6 +102,22 @@ export class MskConnectStack extends Stack {
           description: "connector plugin",
         },
       },
+      onDelete: {
+        service: "KafkaConnect",
+        action: "deleteCustomPlugin",
+        physicalResourceId: PhysicalResourceId.of("customConnectorPlugin"),
+        parameters: {
+          contentType: "ZIP",
+          location: {
+            s3Location: {
+              bucketArn: `arn:aws:s3:::${PLUGIN_BUCKET}`,
+              fileKey: PLUGIN_FILE,
+            },
+          },
+          name: "kafka-connect-connector-plugin",
+          description: "connector plugin",
+        },
+      },
     });
 
     const boostrapParam = StringParameter.fromStringParameterName(
@@ -115,11 +130,47 @@ export class MskConnectStack extends Stack {
       vpcName: "msk-vpc",
     });
 
-    const sg = new SecurityGroup(this, "msk-connect-sg", {
-      vpc,
-      description: "Allow msk connector traffic",
-      allowAllOutbound: true,
+    const arnParam = StringParameter.fromStringParameterName(
+      this,
+      "msk-cluster-arn-from-param",
+      "/msk/cluster-arn"
+    );
+
+    const mskCluster = Cluster.fromClusterArn(
+      this,
+      "msk-cluster",
+      arnParam.stringValue
+    );
+
+    // const sg = new SecurityGroup(this, "msk-connect-sg", {
+    //   vpc,
+    //   description: "Allow msk connector traffic",
+    //   allowAllOutbound: true,
+    // });
+    // mskCluster.connections.securityGroups.forEach((csg) => {
+    //   sg.connections.allowFrom(csg, Port.allTraffic());
+    // });
+
+    const mskConnectRole = new Role(this, "MskConnectRole", {
+      assumedBy: new ServicePrincipal("kafkaconnect.amazonaws.com"),
     });
+    sinkBucket.grantReadWrite(mskConnectRole);
+    mskConnectRole.addToPolicy(
+      new PolicyStatement({
+        effect: Effect.ALLOW,
+        actions: ["kafka-cluster:Connect", "kafka-cluster:DescribeCluster"],
+        resources: [arnParam.stringValue],
+      })
+    );
+    mskConnectRole.addToPolicy(
+      new PolicyStatement({
+        effect: Effect.ALLOW,
+        actions: ["kafka-cluster:ReadData", "kafka-cluster:DescribeTopic"],
+        resources: [
+          `arn:aws:kafka:us-east-1:270744187218:topic/${mskCluster.clusterName}/*`,
+        ],
+      })
+    );
 
     const mskConnect = new CfnConnector(this, "MskConnector", {
       connectorConfiguration: kafkaConnectS3SinkConfig,
@@ -128,7 +179,8 @@ export class MskConnectStack extends Stack {
         apacheKafkaCluster: {
           bootstrapServers: boostrapParam.stringValue,
           vpc: {
-            securityGroups: [sg.securityGroupId],
+            // securityGroups: [sg.securityGroupId],
+            securityGroups: ["sg-04feba986ef8f22eb"], // TODO: get from param or something, cluster sg
             subnets: vpc.privateSubnets.map((s) => s.subnetId),
           },
         },
@@ -136,13 +188,13 @@ export class MskConnectStack extends Stack {
       capacity: {
         autoScaling: {
           maxWorkerCount: 1,
-          mcuCount: 1,
+          mcuCount: 2,
           minWorkerCount: 1,
           scaleInPolicy: {
-            cpuUtilizationPercentage: 90,
+            cpuUtilizationPercentage: 50,
           },
           scaleOutPolicy: {
-            cpuUtilizationPercentage: 50,
+            cpuUtilizationPercentage: 80,
           },
         },
       },
@@ -152,7 +204,7 @@ export class MskConnectStack extends Stack {
       kafkaClusterEncryptionInTransit: {
         encryptionType: "TLS",
       },
-      kafkaConnectVersion: "2.8.0",
+      kafkaConnectVersion: "2.7.1",
       plugins: [
         {
           customPlugin: {

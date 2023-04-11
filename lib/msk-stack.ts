@@ -13,11 +13,7 @@ import {
   Peer,
   Port,
 } from "aws-cdk-lib/aws-ec2";
-import {
-  ManagedPolicy,
-  Role,
-  ServicePrincipal,
-} from "aws-cdk-lib/aws-iam";
+import { ManagedPolicy, Role, ServicePrincipal } from "aws-cdk-lib/aws-iam";
 import * as fs from "fs";
 import { Cluster, KafkaVersion } from "@aws-cdk/aws-msk-alpha";
 import { StringParameter } from "aws-cdk-lib/aws-ssm";
@@ -59,6 +55,11 @@ export class MskStack extends Stack {
     new StringParameter(this, "msk-brokers-ssm", {
       stringValue: mskCluster.bootstrapBrokersTls,
       parameterName: "/msk/bootstrap-brokers",
+    });
+
+    new StringParameter(this, "msk-cluster-arn", {
+      stringValue: mskCluster.clusterArn,
+      parameterName: "/msk/cluster-arn",
     });
 
     const instanceSG = new SecurityGroup(this, "instance-sg", {
