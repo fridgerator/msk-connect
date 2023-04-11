@@ -14,10 +14,9 @@ import {
   AwsCustomResourcePolicy,
   PhysicalResourceId,
 } from "aws-cdk-lib/custom-resources";
-import { LogGroup } from "aws-cdk-lib/aws-logs";
 import { StringParameter } from "aws-cdk-lib/aws-ssm";
-import { Port, SecurityGroup, Vpc } from "aws-cdk-lib/aws-ec2";
-import { Cluster } from "@aws-cdk/aws-msk-alpha";
+import { Vpc } from "aws-cdk-lib/aws-ec2";
+// import { Cluster } from "@aws-cdk/aws-msk-alpha";
 
 const PLUGIN_BUCKET = "msk-connect-plugin-bucket";
 const PLUGIN_FILE = "confluentinc-kafka-connect-s3-10.4.2.zip";
@@ -44,12 +43,9 @@ export class MskConnectStack extends Stack {
       topics: "nicks_topic", // Replace with your Kafka topic
       "s3.region": this.region,
       "s3.bucket.name": sinkBucket.bucketName,
-      "s3.part.size": "5242880",
-      "flush.size": "10000",
+      "flush.size": "1",
       "storage.class": "io.confluent.connect.s3.storage.S3Storage",
       "format.class": "io.confluent.connect.s3.format.json.JsonFormat",
-      "schema.generator.class":
-        "io.confluent.connect.storage.hive.schema.DefaultSchemaGenerator",
       "partitioner.class":
         "io.confluent.connect.storage.partitioner.DefaultPartitioner",
     };
@@ -130,17 +126,17 @@ export class MskConnectStack extends Stack {
       vpcName: "msk-vpc",
     });
 
-    const arnParam = StringParameter.fromStringParameterName(
-      this,
-      "msk-cluster-arn-from-param",
-      "/msk/cluster-arn"
-    );
+    // const arnParam = StringParameter.fromStringParameterName(
+    //   this,
+    //   "msk-cluster-arn-from-param",
+    //   "/msk/cluster-arn"
+    // );
 
-    const mskCluster = Cluster.fromClusterArn(
-      this,
-      "msk-cluster",
-      arnParam.stringValue
-    );
+    // const mskCluster = Cluster.fromClusterArn(
+    //   this,
+    //   "msk-cluster",
+    //   arnParam.stringValue
+    // );
 
     // const sg = new SecurityGroup(this, "msk-connect-sg", {
     //   vpc,
@@ -154,27 +150,50 @@ export class MskConnectStack extends Stack {
     const mskConnectRole = new Role(this, "MskConnectRole", {
       assumedBy: new ServicePrincipal("kafkaconnect.amazonaws.com"),
     });
-    sinkBucket.grantReadWrite(mskConnectRole);
+    sinkBucket.grantWrite(mskConnectRole);
     mskConnectRole.addToPolicy(
       new PolicyStatement({
         effect: Effect.ALLOW,
-        actions: ["kafka-cluster:Connect", "kafka-cluster:DescribeCluster"],
-        resources: [arnParam.stringValue],
+        actions: [
+          "kafkaconnect:*",
+          "ec2:CreateNetworkInterface",
+          "ec2:DescribeSubnets",
+          "ec2:DescribeVpcs",
+          "ec2:DescribeSecurityGroups",
+          "ec2:CreateTags",
+          "logs:CreateLogDelivery",
+          "logs:GetLogDelivery",
+          "logs:DeleteLogDelivery",
+          "logs:ListLogDeliveries",
+          "logs:PutResourcePolicy",
+          "logs:DescribeResourcePolicies",
+          "logs:DescribeLogGroups",
+        ],
+        resources: ["*"],
       })
     );
     mskConnectRole.addToPolicy(
       new PolicyStatement({
         effect: Effect.ALLOW,
-        actions: ["kafka-cluster:ReadData", "kafka-cluster:DescribeTopic"],
-        resources: [
-          `arn:aws:kafka:us-east-1:270744187218:topic/${mskCluster.clusterName}/*`,
+        actions: [
+          "ec2:DescribeNetworkInterfaces",
+          "ec2:CreateNetworkInterfacePermission",
+          "ec2:AttachNetworkInterface",
+          "ec2:DetachNetworkInterface",
+          "ec2:DeleteNetworkInterface",
         ],
+        resources: ["arn:aws:ec2:*:*:network-interface/*"],
+        conditions: {
+          StringEquals: {
+            "ec2:ResourceTag/AmazonMSKConnectManaged": "true",
+          },
+        },
       })
     );
 
     const mskConnect = new CfnConnector(this, "MskConnector", {
       connectorConfiguration: kafkaConnectS3SinkConfig,
-      connectorName: "S3-sink-connector",
+      connectorName: "s3SinkConnector",
       kafkaCluster: {
         apacheKafkaCluster: {
           bootstrapServers: boostrapParam.stringValue,
@@ -202,7 +221,7 @@ export class MskConnectStack extends Stack {
         authenticationType: "NONE",
       },
       kafkaClusterEncryptionInTransit: {
-        encryptionType: "TLS",
+        encryptionType: "PLAINTEXT",
       },
       kafkaConnectVersion: "2.7.1",
       plugins: [
@@ -216,16 +235,16 @@ export class MskConnectStack extends Stack {
         },
       ],
       serviceExecutionRoleArn: mskConnectRole.roleArn,
-      logDelivery: {
-        workerLogDelivery: {
-          cloudWatchLogs: {
-            enabled: true,
-            logGroup: new LogGroup(this, "msk-connect-LogGroup", {
-              removalPolicy: RemovalPolicy.DESTROY,
-            }).logGroupName,
-          },
-        },
-      },
+      // logDelivery: {
+      //   workerLogDelivery: {
+      //     cloudWatchLogs: {
+      //       enabled: true,
+      //       logGroup: new LogGroup(this, "msk-connect-LogGroup", {
+      //         removalPolicy: RemovalPolicy.DESTROY,
+      //       }).logGroupName,
+      //     },
+      //   },
+      // },
     });
 
     mskConnect.node.addDependency(sinkBucket);
