@@ -8,7 +8,7 @@ import {
   Role,
   ServicePrincipal,
 } from "aws-cdk-lib/aws-iam";
-import { CfnConnector } from "aws-cdk-lib/aws-kafkaconnect";
+import { CfnConnector, CfnConnectorProps } from "aws-cdk-lib/aws-kafkaconnect";
 import {
   AwsCustomResource,
   AwsCustomResourcePolicy,
@@ -35,6 +35,7 @@ export class MskConnectStack extends Stack {
       versioned: false,
       autoDeleteObjects: true,
       removalPolicy: RemovalPolicy.DESTROY,
+      bucketName: "msk-sink-bucket-nfff",
     });
 
     const kafkaConnectS3SinkConfig = {
@@ -42,7 +43,7 @@ export class MskConnectStack extends Stack {
       "tasks.max": "1",
       topics: "nicks_topic", // Replace with your Kafka topic
       "s3.region": this.region,
-      "s3.bucket.name": sinkBucket.bucketName,
+      "s3.bucket.name": "msk-sink-bucket-nfff",
       "flush.size": "1",
       "storage.class": "io.confluent.connect.s3.storage.S3Storage",
       "format.class": "io.confluent.connect.s3.format.json.JsonFormat",
@@ -50,55 +51,55 @@ export class MskConnectStack extends Stack {
         "io.confluent.connect.storage.partitioner.DefaultPartitioner",
     };
 
-    // const plugin = new AwsCustomResource(this, "msk-connect-plugin", {
-    //   policy: AwsCustomResourcePolicy.fromStatements([
-    //     new PolicyStatement({
-    //       effect: Effect.ALLOW,
-    //       actions: ["s3:GetObject"],
-    //       resources: [`arn:aws:s3:::${PLUGIN_BUCKET}/*`],
-    //     }),
-    //     new PolicyStatement({
-    //       effect: Effect.ALLOW,
-    //       actions: [
-    //         "kafkaconnect:CreateCustomPlugin",
-    //         "kafkaconnect:DeleteCustomPlugin",
-    //       ],
-    //       resources: ["*"],
-    //     }),
-    //   ]),
-    //   onUpdate: {
-    //     service: "KafkaConnect",
-    //     action: "createCustomPlugin",
-    //     physicalResourceId: PhysicalResourceId.of("customConnectorPlugin"),
-    //     parameters: {
-    //       contentType: "ZIP",
-    //       location: {
-    //         s3Location: {
-    //           bucketArn: `arn:aws:s3:::${PLUGIN_BUCKET}`,
-    //           fileKey: PLUGIN_FILE,
-    //         },
-    //       },
-    //       name: "kafka-connect-connector-plugin",
-    //       description: "connector plugin",
-    //     },
-    //   },
-    //   onCreate: {
-    //     service: "KafkaConnect",
-    //     action: "createCustomPlugin",
-    //     physicalResourceId: PhysicalResourceId.of("customConnectorPlugin"),
-    //     parameters: {
-    //       contentType: "ZIP",
-    //       location: {
-    //         s3Location: {
-    //           bucketArn: `arn:aws:s3:::${PLUGIN_BUCKET}`,
-    //           fileKey: PLUGIN_FILE,
-    //         },
-    //       },
-    //       name: "kafka-connect-connector-plugin",
-    //       description: "connector plugin",
-    //     },
-    //   },
-    // });
+    const plugin = new AwsCustomResource(this, "msk-connect-plugin", {
+      policy: AwsCustomResourcePolicy.fromStatements([
+        new PolicyStatement({
+          effect: Effect.ALLOW,
+          actions: ["s3:GetObject"],
+          resources: [`arn:aws:s3:::${PLUGIN_BUCKET}/*`],
+        }),
+        new PolicyStatement({
+          effect: Effect.ALLOW,
+          actions: [
+            "kafkaconnect:CreateCustomPlugin",
+            "kafkaconnect:DeleteCustomPlugin",
+          ],
+          resources: ["*"],
+        }),
+      ]),
+      onUpdate: {
+        service: "KafkaConnect",
+        action: "createCustomPlugin",
+        physicalResourceId: PhysicalResourceId.of("customConnectorPlugin"),
+        parameters: {
+          contentType: "ZIP",
+          location: {
+            s3Location: {
+              bucketArn: `arn:aws:s3:::${PLUGIN_BUCKET}`,
+              fileKey: PLUGIN_FILE,
+            },
+          },
+          name: "kafka-connect-connector-plugin",
+          description: "connector plugin",
+        },
+      },
+      onCreate: {
+        service: "KafkaConnect",
+        action: "createCustomPlugin",
+        physicalResourceId: PhysicalResourceId.of("customConnectorPlugin"),
+        parameters: {
+          contentType: "ZIP",
+          location: {
+            s3Location: {
+              bucketArn: `arn:aws:s3:::${PLUGIN_BUCKET}`,
+              fileKey: PLUGIN_FILE,
+            },
+          },
+          name: "kafka-connect-connector-plugin",
+          description: "connector plugin",
+        },
+      },
+    });
 
     // new AwsCustomResource(this, "msk-connect-plugin-delete", {
     //   policy: AwsCustomResourcePolicy.fromStatements([
@@ -157,50 +158,52 @@ export class MskConnectStack extends Stack {
     const mskConnectRole = new Role(this, "MskConnectRole", {
       assumedBy: new ServicePrincipal("kafkaconnect.amazonaws.com"),
     });
-    sinkBucket.grantWrite(mskConnectRole);
-    mskConnectRole.addToPolicy(
-      new PolicyStatement({
-        effect: Effect.ALLOW,
-        actions: [
-          "kafkaconnect:*",
-          "ec2:CreateNetworkInterface",
-          "ec2:DescribeSubnets",
-          "ec2:DescribeVpcs",
-          "ec2:DescribeSecurityGroups",
-          "ec2:CreateTags",
-          "logs:CreateLogDelivery",
-          "logs:GetLogDelivery",
-          "logs:DeleteLogDelivery",
-          "logs:ListLogDeliveries",
-          "logs:PutResourcePolicy",
-          "logs:DescribeResourcePolicies",
-          "logs:DescribeLogGroups",
-        ],
-        resources: ["*"],
-      })
-    );
-    mskConnectRole.addToPolicy(
-      new PolicyStatement({
-        effect: Effect.ALLOW,
-        actions: [
-          "ec2:DescribeNetworkInterfaces",
-          "ec2:CreateNetworkInterfacePermission",
-          "ec2:AttachNetworkInterface",
-          "ec2:DetachNetworkInterface",
-          "ec2:DeleteNetworkInterface",
-        ],
-        resources: ["arn:aws:ec2:*:*:network-interface/*"],
-        conditions: {
-          StringEquals: {
-            "ec2:ResourceTag/AmazonMSKConnectManaged": "true",
-          },
-        },
-      })
-    );
+    // sinkBucket.grantWrite(mskConnectRole);
+    // mskConnectRole.addToPolicy(
+    //   new PolicyStatement({
+    //     effect: Effect.ALLOW,
+    //     actions: [
+    //       "kafkaconnect:*",
+    //       "ec2:CreateNetworkInterface",
+    //       "ec2:DescribeSubnets",
+    //       "ec2:DescribeVpcs",
+    //       "ec2:DescribeSecurityGroups",
+    //       "ec2:CreateTags",
+    //       "logs:CreateLogDelivery",
+    //       "logs:GetLogDelivery",
+    //       "logs:DeleteLogDelivery",
+    //       "logs:ListLogDeliveries",
+    //       "logs:PutResourcePolicy",
+    //       "logs:DescribeResourcePolicies",
+    //       "logs:DescribeLogGroups",
+    //     ],
+    //     resources: ["*"],
+    //   })
+    // );
+    // mskConnectRole.addToPolicy(
+    //   new PolicyStatement({
+    //     effect: Effect.ALLOW,
+    //     actions: [
+    //       "ec2:DescribeNetworkInterfaces",
+    //       "ec2:CreateNetworkInterfacePermission",
+    //       "ec2:AttachNetworkInterface",
+    //       "ec2:DetachNetworkInterface",
+    //       "ec2:DeleteNetworkInterface",
+    //     ],
+    //     resources: ["arn:aws:ec2:*:*:network-interface/*"],
+    //     conditions: {
+    //       StringEquals: {
+    //         "ec2:ResourceTag/AmazonMSKConnectManaged": "true",
+    //       },
+    //     },
+    //   })
+    // );
 
-    const mskConnect = new CfnConnector(this, "MskConnector", {
-      connectorConfiguration: kafkaConnectS3SinkConfig,
-      connectorName: "s3SinkConnector",
+    const props: CfnConnectorProps = {
+      connectorConfiguration: JSON.parse(
+        JSON.stringify(kafkaConnectS3SinkConfig)
+      ),
+      connectorName: "msk-s3-sink-connector",
       kafkaCluster: {
         apacheKafkaCluster: {
           bootstrapServers: boostrapParam.stringValue,
@@ -214,7 +217,7 @@ export class MskConnectStack extends Stack {
       capacity: {
         autoScaling: {
           maxWorkerCount: 1,
-          mcuCount: 2,
+          mcuCount: 1,
           minWorkerCount: 1,
           scaleInPolicy: {
             cpuUtilizationPercentage: 50,
@@ -234,8 +237,9 @@ export class MskConnectStack extends Stack {
       plugins: [
         {
           customPlugin: {
-            customPluginArn:
-              "arn:aws:kafkaconnect:us-east-1:270744187218:custom-plugin/kafka-connect-connector-plugin/8b4fed71-6f16-4f53-a2c0-113f53dce173-2",
+            customPluginArn: plugin
+              .getResponseFieldReference("customPluginArn")
+              .toString(),
             revision: 1,
           },
         },
@@ -251,8 +255,13 @@ export class MskConnectStack extends Stack {
       //     },
       //   },
       // },
-    });
+    };
+
+    // console.log("props : ", props);
+
+    const mskConnect = new CfnConnector(this, "MskConnector", props);
 
     mskConnect.node.addDependency(sinkBucket);
+    mskConnect.node.addDependency(plugin);
   }
 }
